@@ -42,6 +42,9 @@ class OverlayManager:
         self.help_canvas = None
         self.custom_font = "Arial"  # Default font
         self.is_visible = False  # Track if overlay is currently shown
+        self.monitor_info = None
+        self.screen_width = None
+        self.screen_height = None
         self._load_custom_fonts()
 
     def _load_custom_fonts(self):
@@ -59,19 +62,17 @@ class OverlayManager:
                         print(f"[Font] Loaded custom font: {font_name}")
                         return
 
-    def init(self):
+    def init(self, monitor_info=None):
         """Initialize Tkinter window."""
         self.root = tk.Tk()
+        self.monitor_info = monitor_info
         self.root.withdraw()
         self.root.attributes('-alpha', 1.0)
         self.root.attributes('-topmost', True)
         self.root.overrideredirect(True)
         self.root.attributes('-transparentcolor', 'black')
 
-        # Fullscreen
-        screen_width = self.root.winfo_screenwidth()
-        screen_height = self.root.winfo_screenheight()
-        self.root.geometry(f"{screen_width}x{screen_height}+0+0")
+        self._apply_monitor_geometry()
         self.root.configure(bg='black')
 
         # Status frame (top-left)
@@ -92,7 +93,7 @@ class OverlayManager:
             self.root, width=180, height=70,
             bg='black', highlightthickness=0
         )
-        self.help_canvas.place(x=10, y=screen_height - 80)
+        self.help_canvas.place(x=10, y=self.screen_height - 80)
 
         # Background for help text
         self.help_canvas.create_rectangle(
@@ -115,6 +116,35 @@ class OverlayManager:
 
         # Start update loop
         self._update_messages()
+
+    def _apply_monitor_geometry(self):
+        """Apply current monitor geometry to the root window."""
+        if not self.root:
+            return
+
+        if self.monitor_info:
+            width = self.monitor_info.get('width', self.root.winfo_screenwidth())
+            height = self.monitor_info.get('height', self.root.winfo_screenheight())
+            left = self.monitor_info.get('left', 0)
+            top = self.monitor_info.get('top', 0)
+        else:
+            width = self.root.winfo_screenwidth()
+            height = self.root.winfo_screenheight()
+            left = 0
+            top = 0
+
+        self.screen_width = width
+        self.screen_height = height
+        self.root.geometry(f"{width}x{height}+{left}+{top}")
+
+    def update_monitor(self, monitor_info):
+        """Update overlay to display on a different monitor."""
+        self.monitor_info = monitor_info
+        self._apply_monitor_geometry()
+        if self.help_canvas:
+            self.help_canvas.place_configure(y=self.screen_height - 80)
+        # Hide any existing grid to avoid misplacement
+        self._hide_grid_impl()
 
     def add_status(self, message):
         """Add a status message."""
@@ -150,6 +180,14 @@ class OverlayManager:
                 label.config(text=messages_list[i]['text'])
             else:
                 label.config(text="")
+
+    def clear_popup_layers(self):
+        """Destroy temporary popup canvases such as menus or dialogs."""
+        if not self.root:
+            return
+        for widget in list(self.root.winfo_children()):
+            if isinstance(widget, tk.Canvas) and getattr(widget, "_maphelper_popup", False):
+                widget.destroy()
 
     def show_grid(self, roi_rect, grid_config, cell_locations, location_names=None):
         """Show grid overlay.
@@ -262,8 +300,8 @@ class OverlayManager:
         current_rect = {'id': None}
 
         # Get screen size
-        screen_width = self.root.winfo_screenwidth()
-        screen_height = self.root.winfo_screenheight()
+        screen_width = self.screen_width or self.root.winfo_screenwidth()
+        screen_height = self.screen_height or self.root.winfo_screenheight()
 
         # Create fullscreen canvas
         selector_canvas = tk.Canvas(

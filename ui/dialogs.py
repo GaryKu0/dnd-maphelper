@@ -45,6 +45,98 @@ def get_custom_font():
 CUSTOM_FONT = get_custom_font()
 
 
+def show_monitor_selection():
+    """Show monitor selection dialog if multiple monitors detected.
+    Returns selected monitor index (1-based) or None if cancelled/error."""
+    from utils.capture import get_all_monitors
+
+    monitors = get_all_monitors()
+
+    # If only one monitor, return it directly
+    if len(monitors) == 1:
+        return monitors[0]['index']
+
+    # Create dialog window
+    dialog = tk.Tk()
+    dialog.title("Select Monitor")
+    dialog.geometry("500x400")
+    dialog.configure(bg="#1a1a1a")
+    dialog.resizable(False, False)
+
+    # Center the window
+    dialog.update_idletasks()
+    width = dialog.winfo_width()
+    height = dialog.winfo_height()
+    x = (dialog.winfo_screenwidth() // 2) - (width // 2)
+    y = (dialog.winfo_screenheight() // 2) - (height // 2)
+    dialog.geometry(f'{width}x{height}+{x}+{y}')
+
+    # Selected monitor (use list to allow modification in nested function)
+    selected = [None]
+
+    # Title
+    title_label = tk.Label(
+        dialog,
+        text="Select Monitor for Dark and Darker",
+        font=(CUSTOM_FONT, 16, "bold"),
+        fg="#FFD700",
+        bg="#1a1a1a"
+    )
+    title_label.pack(pady=20)
+
+    # Description
+    desc_label = tk.Label(
+        dialog,
+        text="Which monitor are you playing Dark and Darker on?",
+        font=(CUSTOM_FONT, 10),
+        fg="#FFFFFF",
+        bg="#1a1a1a"
+    )
+    desc_label.pack(pady=5)
+
+    # Monitor list frame
+    list_frame = tk.Frame(dialog, bg="#1a1a1a")
+    list_frame.pack(pady=20, padx=20, fill=tk.BOTH, expand=True)
+
+    def on_select(monitor_index):
+        selected[0] = monitor_index
+        dialog.quit()
+        dialog.destroy()
+
+    # Create button for each monitor
+    for mon in monitors:
+        btn_frame = tk.Frame(list_frame, bg="#2a2a2a", relief=tk.RAISED, bd=2)
+        btn_frame.pack(pady=5, fill=tk.X)
+
+        btn = tk.Button(
+            btn_frame,
+            text=mon['description'],
+            font=(CUSTOM_FONT, 11),
+            bg="#3a3a3a",
+            fg="#FFFFFF",
+            activebackground="#4a4a4a",
+            activeforeground="#FFD700",
+            relief=tk.FLAT,
+            cursor="hand2",
+            command=lambda m=mon['index']: on_select(m)
+        )
+        btn.pack(fill=tk.BOTH, padx=5, pady=5)
+
+    # Footer note
+    note_label = tk.Label(
+        dialog,
+        text="You can change this later in Settings",
+        font=(CUSTOM_FONT, 8),
+        fg="#888888",
+        bg="#1a1a1a"
+    )
+    note_label.pack(pady=10)
+
+    dialog.mainloop()
+
+    return selected[0]
+
+
 def show_title_overlay(root, roi):
     """Show just the title overlay without menu. Returns title canvas."""
     if not roi:
@@ -60,6 +152,7 @@ def show_title_overlay(root, roi):
         bg='black', highlightthickness=0
     )
     title_canvas.place(x=title_x - 300, y=title_y - 40)
+    setattr(title_canvas, "_maphelper_popup", True)
 
     # Title text - moved higher within canvas
     title_canvas.create_text(
@@ -141,6 +234,7 @@ def show_main_menu(root, available_maps, roi=None):
         bg='black', highlightthickness=0
     )
     canvas.place(x=menu_x, y=menu_y)
+    setattr(canvas, "_maphelper_popup", True)
 
     # Draw large rounded background
     create_rounded_rect(
@@ -269,6 +363,7 @@ def show_map_confirmation(root, map_name):
         bg='#1a1a1a', highlightthickness=3, highlightbackground='#d0cbc8'
     )
     canvas.place(x=dialog_x, y=dialog_y)
+    setattr(canvas, "_maphelper_popup", True)
 
     # Title
     canvas.create_text(
@@ -378,6 +473,7 @@ def show_settings_dialog(root, settings):
         bg='#1a1a1a', highlightthickness=3, highlightbackground='#d0cbc8'
     )
     canvas.place(x=settings_x, y=settings_y)
+    setattr(canvas, "_maphelper_popup", True)
 
     # Title
     canvas.create_text(

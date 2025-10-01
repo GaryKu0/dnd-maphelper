@@ -16,7 +16,8 @@ class Settings:
         "ratio_test": 0.75,  # Tighter matching
         "early_stop_threshold": 75,  # Confidence % to stop early (0-100 scale)
         "min_cache_confidence": 60,  # Min confidence % to trust cached results
-        "language": "en"  # Language for location names (en, zh, etc.)
+        "language": "en",  # Language for location names (en, zh, etc.)
+        "monitor_index": 1  # Default monitor selection
     }
 
     def __init__(self, settings_file="settings.json"):
