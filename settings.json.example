@@ -1,0 +1,13 @@
+{
+  "threading_enabled": true,
+  "thread_count": 8,
+  "min_inliers": 6,
+  "match_threshold": 10,
+  "cache_duration_minutes": 15,
+  "update_interval_cells": 3,
+  "orb_features": 6000,
+  "ratio_test": 0.75,
+  "early_stop_threshold": 75,
+  "min_cache_confidence": 60,
+  "language": "en"
+}

@@ -1,0 +1,5 @@
+# Development dependencies (includes runtime + build tools)
+-r requirements.txt
+
+# Build tools
+pyinstaller>=5.0
