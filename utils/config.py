@@ -11,7 +11,7 @@ class Config:
             with open(path, "r", encoding="utf-8") as f:
                 self.data = json.load(f)
         else:
-            self.data = {"roi_by_resolution": {}, "maps": {}}
+            self.data = {"roi_by_resolution": {}, "maps": {}, "monitor_index": None}
 
     def save(self):
         with open(self.path, "w", encoding="utf-8") as f:
@@ -53,3 +53,16 @@ class Config:
         if map_name not in self.data["maps"]:
             self.data["maps"][map_name] = {}
         self.data["maps"][map_name]["translation"] = mapping
+
+    # ----- Monitor selection -----
+    def get_monitor_index(self):
+        """Get the stored monitor index, or None if not set."""
+        return self.data.get("monitor_index")
+
+    def set_monitor_index(self, monitor_index:int):
+        """Set the monitor index."""
+        self.data["monitor_index"] = int(monitor_index)
+
+    def has_monitor_index(self):
+        """Check if monitor index is configured."""
+        return "monitor_index" in self.data and self.data["monitor_index"] is not None

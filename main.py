@@ -3,7 +3,6 @@ import os
 import sys
 import time
 import threading
-import keyboard
 import atexit
 from contextlib import contextmanager
 
@@ -11,6 +10,7 @@ from utils.config import Config
 from utils.capture import capture_screen, screen_resolution_key, get_all_monitors, set_monitor
 from utils.settings import get_settings
 from utils.resource_path import resource_path
+from utils.hotkey_manager import get_hotkey_manager
 from ui.overlay_manager import OverlayManager
 from ui.dialogs import (
     show_main_menu,
@@ -121,25 +121,14 @@ def get_monitor_info(monitor_index, monitors=None):
 @contextmanager
 def block_user_input():
     """Temporarily block input handling while modal dialogs are shown."""
+    hotkey_mgr = get_hotkey_manager()
     input_block_event.set()
+    hotkey_mgr.block()
     try:
-        try:
-            keyboard.block_key("m")
-        except Exception:
-            pass
         yield
     finally:
-        try:
-            keyboard.unblock_key("m")
-        except Exception:
-            pass
-        for _ in range(20):
-            try:
-                if not keyboard.is_pressed("m"):
-                    break
-            except Exception:
-                break
-            time.sleep(0.05)
+        time.sleep(0.1)
+        hotkey_mgr.unblock()
         input_block_event.clear()
 
 
@@ -224,18 +213,34 @@ def initialize_monitor_selection():
         current_monitor_info = None
         return None
 
-    stored_index = app_settings.get("monitor_index", monitors[0]['index'])
-    if not any(mon['index'] == stored_index for mon in monitors):
+    # Check config file for stored monitor index
+    with config_lock:
+        stored_index = config_store.get_monitor_index()
+
+    # If no stored index or invalid, use first available monitor
+    if stored_index is None or not any(mon['index'] == stored_index for mon in monitors):
         stored_index = monitors[0]['index']
 
     selected_index = stored_index
-    if len(monitors) > 1:
+
+    # Only show monitor selection dialog if:
+    # 1. Multiple monitors are available AND
+    # 2. No monitor is configured yet
+    if len(monitors) > 1 and not config_store.has_monitor_index():
         selection = show_monitor_selection()
         if selection:
             selected_index = selection
+        # Save the selection (whether from dialog or default)
+        with config_lock:
+            config_store.set_monitor_index(selected_index)
+            config_store.save()
+    elif not config_store.has_monitor_index():
+        # Single monitor case - save the default
+        with config_lock:
+            config_store.set_monitor_index(selected_index)
+            config_store.save()
 
     set_monitor(selected_index)
-    app_settings.set("monitor_index", selected_index)
     current_monitor_info = get_monitor_info(selected_index, monitors)
     return current_monitor_info
 
@@ -249,8 +254,12 @@ def apply_monitor_selection(monitor_index, monitors=None, notify=True):
     if not info:
         return False
 
+    # Save monitor selection to config
+    with config_lock:
+        config_store.set_monitor_index(monitor_index)
+        config_store.save()
+
     set_monitor(monitor_index)
-    app_settings.set("monitor_index", monitor_index)
 
     stop_current_detection(hide_overlay=True)
     matcher.reset_session()
@@ -294,176 +303,368 @@ def request_shutdown(status_message=None):
 
 
 def keyboard_handler():
-    """Handle keyboard shortcuts for the application."""
+    """Handle keyboard shortcuts using event-driven hotkeys."""
     global map_showing, current_roi, detector
 
-    last_esc_press = 0
-    title_canvas = None
+    hotkey_mgr = get_hotkey_manager()
+    last_esc_press = {'time': 0}
+    title_canvas = {'ref': None}
 
     overlay.add_status("=== Map Helper Ready ===")
     overlay.add_status("Press M - Toggle map")
     overlay.add_status("Press R - Reset | ESC x2 - Exit")
 
-    while not shutdown_event.is_set():
+    def handle_esc():
         if input_block_event.is_set():
-            time.sleep(0.05)
-            continue
-
-        if keyboard.is_pressed("esc"):
-            current_time = time.time()
-            if current_time - last_esc_press < 1.0:
-                request_shutdown("[Exit] Closing...")
-                break
-            last_esc_press = current_time
+            return
+        current_time = time.time()
+        if current_time - last_esc_press['time'] < 1.0:
+            request_shutdown("[Exit] Closing...")
+        else:
+            last_esc_press['time'] = current_time
             overlay.add_status("[ESC] Press again to exit")
-            time.sleep(0.5)
-            continue
 
-        if keyboard.is_pressed("r"):
-            stop_current_detection(hide_overlay=True)
-            matcher.reset_session()
+    def handle_reset():
+        if input_block_event.is_set():
+            return
+
+        global current_roi, map_showing
+
+        # Hide current map display
+        if map_showing:
+            overlay.hide_grid()
+            if title_canvas['ref']:
+                try:
+                    title_canvas['ref'].destroy()
+                except Exception:
+                    pass
+                title_canvas['ref'] = None
+
+        overlay.clear_popup_layers()
+        stop_current_detection(hide_overlay=True)
+        matcher.reset_session()
+        map_showing = False
+
+        overlay.add_status("[Reset] Cache cleared - select map")
+
+        # Get ROI if needed
+        roi = ensure_roi()
+        if not roi:
             current_roi = None
-            overlay.add_status("[Reset] Cache cleared")
-            time.sleep(0.5)
-            continue
+            return
 
-        if keyboard.is_pressed("m"):
-            overlay.add_status("[Input] M pressed")
+        frame = capture_screen()
+        roi_img = crop_roi(frame, roi)
+        current_roi = roi
 
-            if matcher.is_cache_expired():
-                overlay.add_status("[Cache] Expired - will re-identify")
-                matcher.reset_session()
-                map_showing = False
-                current_roi = None
+        # Show map selection menu
+        available_maps = get_available_maps()
+        if not available_maps:
+            overlay.add_status("[Error] No maps found")
+            return
 
-            if map_showing:
-                overlay.hide_grid()
-                map_showing = False
-                if title_canvas:
+        while True:
+            choice, title_canvas['ref'] = show_main_menu(overlay.root, available_maps, roi)
+
+            if choice == "CANCEL":
+                if title_canvas['ref']:
                     try:
-                        title_canvas.destroy()
+                        title_canvas['ref'].destroy()
                     except Exception:
                         pass
-                    title_canvas = None
-                overlay.add_status("[Overlay] Hidden")
-                time.sleep(0.5)
-                continue
+                    title_canvas['ref'] = None
+                overlay.clear_popup_layers()
+                overlay.add_status("[Cancelled]")
+                return
+            if choice == "SETTINGS":
+                with block_user_input():
+                    result = show_settings_dialog(overlay.root, app_settings)
+                overlay.clear_popup_layers()
+                if result == 'BACK':
+                    continue
+                if title_canvas['ref']:
+                    try:
+                        title_canvas['ref'].destroy()
+                    except Exception:
+                        pass
+                    title_canvas['ref'] = None
+                overlay.clear_popup_layers()
+                overlay.add_status("[Cancelled]")
+                return
+            if choice is None:
+                # Auto-detect
+                matcher.reset_session()
+                overlay.add_status("[Auto-Detect] Checking first cell...")
+                candidates = matcher.identify_map_from_first_cell(roi_img, MAPS_ROOT)
 
-            if current_roi and matcher._identified_map:
-                map_folder = f"{MAPS_ROOT}/{matcher._identified_map}"
-                grid_config = matcher.load_grid_config(map_folder) or (5, 5)
-                language = app_settings.get("language", "en")
-                location_names = matcher.load_location_names(map_folder, language)
-
-                title_canvas = show_title_overlay(overlay.root, current_roi)
-                overlay.show_grid(current_roi, grid_config, matcher._identified_cells, location_names)
-                map_showing = True
-                overlay.add_status(f"[Overlay] Showing {matcher._identified_map}")
-                time.sleep(0.5)
-                continue
-
-            roi = ensure_roi()
-            if not roi:
-                time.sleep(0.5)
-                continue
-
-            frame = capture_screen()
-            roi_img = crop_roi(frame, roi)
-            current_roi = roi
-
-            if matcher._identified_map is None:
-                available_maps = get_available_maps()
-                if not available_maps:
-                    overlay.add_status("[Error] No maps found")
-                    time.sleep(1.0)
+                if not candidates or not candidates[0]:
+                    overlay.add_status("[Unknown] No match")
                     continue
 
-                while True:
-                    choice, title_canvas = show_main_menu(overlay.root, available_maps, roi)
+                detected_map, confidence, detected_grid, _ = candidates[0]
+                overlay.add_status(f"[Found] {detected_map} ({confidence}% confidence)")
 
-                    if choice == "CANCEL":
-                        if title_canvas:
-                            try:
-                                title_canvas.destroy()
-                            except Exception:
-                                pass
-                            title_canvas = None
-                        overlay.add_status("[Cancelled]")
-                        time.sleep(0.5)
-                        break
-                    if choice == "SETTINGS":
-                        with block_user_input():
-                            result = show_settings_dialog(overlay.root, app_settings)
-                        overlay.clear_popup_layers()
-                        if result == 'BACK':
-                            continue
-                        overlay.add_status("[Cancelled]")
-                        time.sleep(0.5)
-                        break
-                    if choice is None:
-                        matcher.reset_session()
-                        overlay.add_status("[Auto-Detect] Checking first cell...")
-                        candidates = matcher.identify_map_from_first_cell(roi_img, MAPS_ROOT)
+                confirmation = show_map_confirmation(overlay.root, detected_map)
 
-                        if not candidates or not candidates[0]:
-                            overlay.add_status("[Unknown] No match")
-                            time.sleep(1.0)
-                            continue
-
-                        detected_map, confidence, detected_grid, _ = candidates[0]
-                        overlay.add_status(f"[Found] {detected_map} ({confidence}% confidence)")
-
-                        confirmation = show_map_confirmation(overlay.root, detected_map)
-
-                        if confirmation == "YES":
-                            map_name = detected_map
-                            grid_config = detected_grid
-                            matcher._identified_cells = {}
-                            matcher._identified_map = map_name
-                            matcher._cache_timestamp = time.time()
-                            overlay.add_status(f"[Confirmed] {map_name}")
-                            break
-                        if confirmation == "NO":
-                            overlay.add_status("[Rejected] Try again")
-                            matcher.reset_session()
-                            continue
-                        if confirmation == "CHOOSE":
-                            matcher.reset_session()
-                            continue
-                        overlay.add_status("[Cancelled]")
-                        time.sleep(0.5)
-                        break
-
-                    else:
-                        map_name = choice
-                        grid_config = matcher.load_grid_config(f"{MAPS_ROOT}/{map_name}") or (5, 5)
-                        matcher._identified_cells = {}
-                        matcher._identified_map = map_name
-                        matcher._cache_timestamp = time.time()
-                        overlay.add_status(f"[Selected] {map_name}")
-                        break
-
-                if matcher._identified_map is None:
+                if confirmation == "YES":
+                    map_name = detected_map
+                    grid_config = detected_grid
+                    matcher._identified_cells = {}
+                    matcher._identified_map = map_name
+                    matcher._cache_timestamp = time.time()
+                    overlay.add_status(f"[Confirmed] {map_name}")
+                    break
+                if confirmation == "NO":
+                    overlay.add_status("[Rejected] Try again")
+                    matcher.reset_session()
                     continue
+                if confirmation == "CHOOSE":
+                    matcher.reset_session()
+                    continue
+                # Cancelled
+                if title_canvas['ref']:
+                    try:
+                        title_canvas['ref'].destroy()
+                    except Exception:
+                        pass
+                    title_canvas['ref'] = None
+                overlay.clear_popup_layers()
+                overlay.add_status("[Cancelled]")
+                return
             else:
-                map_name = matcher._identified_map
+                # Manual selection
+                map_name = choice
                 grid_config = matcher.load_grid_config(f"{MAPS_ROOT}/{map_name}") or (5, 5)
+                matcher._identified_cells = {}
+                matcher._identified_map = map_name
+                matcher._cache_timestamp = time.time()
+                overlay.add_status(f"[Selected] {map_name}")
+                break
 
+        # Show the map and start detection
+        if matcher._identified_map:
+            if title_canvas['ref']:
+                try:
+                    title_canvas['ref'].destroy()
+                except Exception:
+                    pass
+            overlay.clear_popup_layers()
+
+            title_canvas['ref'] = show_title_overlay(overlay.root, roi)
             map_showing = True
-            map_folder = f"{MAPS_ROOT}/{map_name}"
+            map_folder = f"{MAPS_ROOT}/{matcher._identified_map}"
             language = app_settings.get("language", "en")
             location_names = matcher.load_location_names(map_folder, language)
             overlay.show_grid(roi, grid_config, {}, location_names)
 
             detector = RealtimeDetector(
-                overlay_callback=lambda r, g, c: overlay.show_grid(r, g, c, location_names),
+                overlay_callback=lambda r, g, c: overlay.show_grid(r, g, c, location_names) if map_showing else None,
                 status_callback=lambda message: overlay.add_status(message)
             )
-            detector.start_detection(roi_img, map_name, grid_config, roi)
+            detector.start_detection(roi_img, matcher._identified_map, grid_config, roi)
 
-            time.sleep(0.5)
+    def handle_m():
+        global map_showing, current_roi, detector
+        if input_block_event.is_set():
+            return
+
+        overlay.add_status("[Input] M pressed")
+
+        if matcher.is_cache_expired():
+            overlay.add_status("[Cache] Expired - will re-identify")
+            matcher.reset_session()
+            map_showing = False
+            current_roi = None
+
+        if map_showing:
+            overlay.hide_grid()
+            map_showing = False
+            # Don't stop detector - let it continue in background
+            if title_canvas['ref']:
+                try:
+                    title_canvas['ref'].destroy()
+                except Exception:
+                    pass
+                title_canvas['ref'] = None
+            overlay.clear_popup_layers()  # Clear any remaining popups
+            overlay.add_status("[Overlay] Hidden (detection continues)")
+            return
+
+        if current_roi and matcher._identified_map:
+            map_folder = f"{MAPS_ROOT}/{matcher._identified_map}"
+            grid_config = matcher.load_grid_config(map_folder) or (5, 5)
+            language = app_settings.get("language", "en")
+            location_names = matcher.load_location_names(map_folder, language)
+
+            overlay.clear_popup_layers()  # Clear any leftover popups
+            title_canvas['ref'] = show_title_overlay(overlay.root, current_roi)
+
+            # Show current detection results (including partial if still detecting)
+            current_cells = detector.current_results.copy() if detector and detector.is_running else matcher._identified_cells
+            overlay.show_grid(current_roi, grid_config, current_cells, location_names)
+            map_showing = True
+
+            # Start detector if not running
+            if not detector or not detector.is_running:
+                frame = capture_screen()
+                roi_img = crop_roi(frame, current_roi)
+                detector = RealtimeDetector(
+                    overlay_callback=lambda r, g, c: overlay.show_grid(r, g, c, location_names) if map_showing else None,
+                    status_callback=lambda message: overlay.add_status(message)
+                )
+                detector.start_detection(roi_img, matcher._identified_map, grid_config, current_roi)
+                overlay.add_status(f"[Overlay] Showing {matcher._identified_map} (detecting...)")
+            else:
+                overlay.add_status(f"[Overlay] Showing {matcher._identified_map} (detection in progress)")
+            return
+
+        roi = ensure_roi()
+        if not roi:
+            return
+
+        frame = capture_screen()
+        roi_img = crop_roi(frame, roi)
+        current_roi = roi
+
+        if matcher._identified_map is None:
+            available_maps = get_available_maps()
+            if not available_maps:
+                overlay.add_status("[Error] No maps found")
+                return
+
+            while True:
+                choice, title_canvas['ref'] = show_main_menu(overlay.root, available_maps, roi)
+
+                if choice == "CANCEL":
+                    if title_canvas['ref']:
+                        try:
+                            title_canvas['ref'].destroy()
+                        except Exception:
+                            pass
+                        title_canvas['ref'] = None
+                    overlay.clear_popup_layers()
+                    overlay.add_status("[Cancelled]")
+                    return
+                if choice == "SETTINGS":
+                    with block_user_input():
+                        result = show_settings_dialog(overlay.root, app_settings)
+                    overlay.clear_popup_layers()
+                    if result == 'BACK':
+                        continue
+                    # User closed settings without going back - cancel entire operation
+                    if title_canvas['ref']:
+                        try:
+                            title_canvas['ref'].destroy()
+                        except Exception:
+                            pass
+                        title_canvas['ref'] = None
+                    overlay.clear_popup_layers()
+                    overlay.add_status("[Cancelled]")
+                    return
+                if choice is None:
+                    matcher.reset_session()
+                    overlay.add_status("[Auto-Detect] Checking first cell...")
+                    candidates = matcher.identify_map_from_first_cell(roi_img, MAPS_ROOT)
+
+                    if not candidates or not candidates[0]:
+                        overlay.add_status("[Unknown] No match")
+                        continue
+
+                    detected_map, confidence, detected_grid, _ = candidates[0]
+                    overlay.add_status(f"[Found] {detected_map} ({confidence}% confidence)")
+
+                    confirmation = show_map_confirmation(overlay.root, detected_map)
+
+                    if confirmation == "YES":
+                        map_name = detected_map
+                        grid_config = detected_grid
+                        matcher._identified_cells = {}
+                        matcher._identified_map = map_name
+                        matcher._cache_timestamp = time.time()
+                        overlay.add_status(f"[Confirmed] {map_name}")
+                        break
+                    if confirmation == "NO":
+                        overlay.add_status("[Rejected] Try again")
+                        matcher.reset_session()
+                        continue
+                    if confirmation == "CHOOSE":
+                        matcher.reset_session()
+                        continue
+                    # Confirmation was cancelled
+                    if title_canvas['ref']:
+                        try:
+                            title_canvas['ref'].destroy()
+                        except Exception:
+                            pass
+                        title_canvas['ref'] = None
+                    overlay.clear_popup_layers()
+                    overlay.add_status("[Cancelled]")
+                    return
+
+                else:
+                    map_name = choice
+                    grid_config = matcher.load_grid_config(f"{MAPS_ROOT}/{map_name}") or (5, 5)
+                    matcher._identified_cells = {}
+                    matcher._identified_map = map_name
+                    matcher._cache_timestamp = time.time()
+                    overlay.add_status(f"[Selected] {map_name}")
+                    break
+
+            # If we get here without a map, something went wrong
+            if matcher._identified_map is None:
+                if title_canvas['ref']:
+                    try:
+                        title_canvas['ref'].destroy()
+                    except Exception:
+                        pass
+                    title_canvas['ref'] = None
+                overlay.clear_popup_layers()
+                return
         else:
-            time.sleep(0.05)
+            map_name = matcher._identified_map
+            grid_config = matcher.load_grid_config(f"{MAPS_ROOT}/{map_name}") or (5, 5)
+
+        # Clean up menu title canvas and create new one for grid
+        if title_canvas['ref']:
+            try:
+                title_canvas['ref'].destroy()
+            except Exception:
+                pass
+        overlay.clear_popup_layers()
+
+        # Show the grid with new title
+        title_canvas['ref'] = show_title_overlay(overlay.root, roi)
+        map_showing = True
+        map_folder = f"{MAPS_ROOT}/{map_name}"
+        language = app_settings.get("language", "en")
+        location_names = matcher.load_location_names(map_folder, language)
+        overlay.show_grid(roi, grid_config, {}, location_names)
+
+        detector = RealtimeDetector(
+            overlay_callback=lambda r, g, c: overlay.show_grid(r, g, c, location_names) if map_showing else None,
+            status_callback=lambda message: overlay.add_status(message)
+        )
+        detector.start_detection(roi_img, map_name, grid_config, roi)
+
+    def dispatch(callback):
+        def wrapper():
+            if overlay and overlay.root:
+                overlay.root.after(0, callback)
+        return wrapper
+
+    # Register hotkeys
+    hotkey_mgr.register('esc', 'esc', dispatch(handle_esc))
+    hotkey_mgr.register('reset', 'r', dispatch(handle_reset))
+    hotkey_mgr.register('m', 'm', dispatch(handle_m))
+
+    # Wait for shutdown
+    while not shutdown_event.is_set():
+        time.sleep(0.1)
+
+    # Cleanup
+    hotkey_mgr.unregister_all()
+
+
 
 
 def main():

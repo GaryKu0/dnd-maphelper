@@ -244,12 +244,13 @@ def show_main_menu(root, available_maps, roi=None):
 
     # Create button helper
     def create_button(y, text, command):
+        margin = 30  # Equal margins on both sides
         btn_rect = create_rounded_rect(
-            canvas, 70, y, menu_width - 30, y + 50, radius=10,
+            canvas, margin, y, menu_width - margin, y + 50, radius=10,
             fill="#2a2a2a", outline="#00ff00", width=2
         )
         btn_text = canvas.create_text(
-            menu_width // 2 + 20, y + 25, text=text,
+            menu_width // 2, y + 25, text=text,
             fill="white", font=(CUSTOM_FONT, 12)
         )
 
@@ -278,19 +279,19 @@ def show_main_menu(root, available_maps, roi=None):
     # Map list in 2 columns
     if available_maps:
         canvas.create_text(
-            menu_width // 2 + 20, button_y + 20,
+            menu_width // 2, button_y + 20,
             text="Available Maps:", fill="white", font=(CUSTOM_FONT, 12)
         )
         button_y += 50
 
-        # Calculate 2-column layout with more left padding
-        left_padding = 70
-        col_width = (menu_width - left_padding - 50) // 2
+        # Calculate 2-column layout with equal margins
+        margin = 30
+        col_width = (menu_width - (margin * 2) - 20) // 2  # 20px gap between columns
         for idx, map_name in enumerate(available_maps):
             col = idx % 2
             row = idx // 2
 
-            x_offset = left_padding + (col * (col_width + 20))
+            x_offset = margin + (col * (col_width + 20))
             y_pos = button_y + (row * 55)
 
             btn_rect = create_rounded_rect(
@@ -336,6 +337,17 @@ def show_main_menu(root, available_maps, roi=None):
     root.deiconify()
     while waiting['flag']:
         root.update()
+
+        # Check for M key press using keyboard library (works even when hotkey manager is blocked)
+        try:
+            import keyboard
+            if keyboard.is_pressed('m'):
+                set_result("CANCEL")
+                time.sleep(0.1)
+                break
+        except:
+            pass
+
         time.sleep(0.01)
 
     root.unbind('<Key>')
@@ -446,6 +458,17 @@ def show_map_confirmation(root, map_name):
     root.deiconify()
     while waiting['flag']:
         root.update()
+
+        # Check for M key press using keyboard library (works even when hotkey manager is blocked)
+        try:
+            import keyboard
+            if keyboard.is_pressed('m'):
+                set_result("CHOOSE")
+                time.sleep(0.1)
+                break
+        except:
+            pass
+
         time.sleep(0.01)
 
     root.unbind('<Key>')
@@ -652,6 +675,17 @@ def show_settings_dialog(root, settings):
     root.deiconify()
     while waiting['flag']:
         root.update()
+
+        # Check for M key press using keyboard library (works even when hotkey manager is blocked)
+        try:
+            import keyboard
+            if keyboard.is_pressed('m'):
+                go_back()
+                time.sleep(0.1)
+                break
+        except:
+            pass
+
         time.sleep(0.01)
 
     root.unbind('<Key>')
