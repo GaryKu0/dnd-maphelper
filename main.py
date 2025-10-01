@@ -9,7 +9,7 @@ from contextlib import contextmanager
 from utils.config import Config
 from utils.capture import capture_screen, screen_resolution_key, get_all_monitors, set_monitor
 from utils.settings import get_settings
-from utils.resource_path import resource_path
+from utils.resource_path import resource_path, is_executable
 from utils.hotkey_manager import get_hotkey_manager
 from ui.overlay_manager import OverlayManager
 from ui.dialogs import (
@@ -49,20 +49,32 @@ def acquire_single_instance_lock():
     """Acquire single instance lock. Returns True if successful, False if another instance is running."""
     global lock_file_handle
     
+    # Use a more appropriate location for lock files
+    if is_executable():
+        # For executables, use temp directory
+        import tempfile
+        lock_path = os.path.join(tempfile.gettempdir(), "maphelper.lock")
+    else:
+        # For development, use current directory
+        lock_path = LOCK_FILE
+    
     try:
         # Try to create/open the lock file exclusively
         if os.name == 'nt':  # Windows
             import msvcrt
-            lock_file_handle = open(LOCK_FILE, 'w')
+            lock_file_handle = open(lock_path, 'w')
             msvcrt.locking(lock_file_handle.fileno(), msvcrt.LK_NBLCK, 1)
         else:  # Unix-like systems
             import fcntl
-            lock_file_handle = open(LOCK_FILE, 'w')
+            lock_file_handle = open(lock_path, 'w')
             fcntl.flock(lock_file_handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
         
         # Write PID to lock file
         lock_file_handle.write(str(os.getpid()))
         lock_file_handle.flush()
+        
+        # Store the lock path for cleanup
+        lock_file_handle.lock_path = lock_path
         
         # Register cleanup function
         atexit.register(release_single_instance_lock)
@@ -84,6 +96,7 @@ def release_single_instance_lock():
     global lock_file_handle
     
     if lock_file_handle:
+        lock_path = getattr(lock_file_handle, 'lock_path', LOCK_FILE)
         try:
             if os.name == 'nt':  # Windows
                 import msvcrt
@@ -92,13 +105,13 @@ def release_single_instance_lock():
         except:
             pass
         lock_file_handle = None
-    
-    # Remove lock file
-    try:
-        if os.path.exists(LOCK_FILE):
-            os.remove(LOCK_FILE)
-    except:
-        pass
+        
+        # Remove lock file
+        try:
+            if os.path.exists(lock_path):
+                os.remove(lock_path)
+        except:
+            pass
 
 
 def get_available_maps():
@@ -156,6 +169,11 @@ def ensure_roi(force=False):
     if stored_roi and not force:
         return stored_roi
 
+    # Add delay to allow game map to render properly before screenshot
+    if overlay:
+        overlay.add_status("[ROI] Preparing screen capture in 0.3 seconds...")
+    time.sleep(0.3)
+    
     frame = capture_screen()
 
     if not overlay or not overlay.root:
@@ -364,7 +382,23 @@ def keyboard_handler():
             return
 
         while True:
+            menu_debug = "[Debug] About to show main menu..."
+            print(menu_debug)
+            overlay.add_status(menu_debug)
+            
+            maps_debug = f"[Debug] Available maps: {len(available_maps)}"
+            print(maps_debug)
+            overlay.add_status(maps_debug)
+            
+            roi_debug = f"[Debug] ROI: {roi}"
+            print(roi_debug)
+            overlay.add_status(roi_debug)
+            
             choice, title_canvas['ref'] = show_main_menu(overlay.root, available_maps, roi)
+            
+            choice_debug = f"[Debug] Menu returned: {choice}"
+            print(choice_debug)
+            overlay.add_status(choice_debug)
 
             if choice == "CANCEL":
                 if title_canvas['ref']:
@@ -374,7 +408,12 @@ def keyboard_handler():
                         pass
                     title_canvas['ref'] = None
                 overlay.clear_popup_layers()
+                overlay.hide_grid()  # Hide the overlay completely
+                map_showing = False  # Reset map showing state
                 overlay.add_status("[Cancelled]")
+                print("[Debug] Menu cancelled - overlay hidden")
+                print(f"[Debug] Overlay visible after hide: {overlay.is_visible}")
+                print(f"[Debug] Map showing reset to: {map_showing}")
                 return
             if choice == "SETTINGS":
                 with block_user_input():
@@ -389,7 +428,12 @@ def keyboard_handler():
                         pass
                     title_canvas['ref'] = None
                 overlay.clear_popup_layers()
+                overlay.hide_grid()  # Hide the overlay completely
+                map_showing = False  # Reset map showing state
                 overlay.add_status("[Cancelled]")
+                print("[Debug] Settings cancelled - overlay hidden")
+                print(f"[Debug] Overlay visible after hide: {overlay.is_visible}")
+                print(f"[Debug] Map showing reset to: {map_showing}")
                 return
             if choice is None:
                 # Auto-detect
@@ -429,7 +473,12 @@ def keyboard_handler():
                         pass
                     title_canvas['ref'] = None
                 overlay.clear_popup_layers()
+                overlay.hide_grid()  # Hide the overlay completely
+                map_showing = False  # Reset map showing state
                 overlay.add_status("[Cancelled]")
+                print("[Debug] Settings cancelled - overlay hidden")
+                print(f"[Debug] Overlay visible after hide: {overlay.is_visible}")
+                print(f"[Debug] Map showing reset to: {map_showing}")
                 return
             else:
                 # Manual selection
@@ -466,9 +515,27 @@ def keyboard_handler():
     def handle_m():
         global map_showing, current_roi, detector
         if input_block_event.is_set():
+            print("[Input] M pressed (blocked)")
+            overlay.add_status("[Input] M pressed (blocked)")
             return
 
+        print("[Input] M pressed")
         overlay.add_status("[Input] M pressed")
+        
+        # Debug information - both overlay and console
+        debug_info = [
+            f"[Debug] Map showing: {map_showing}",
+            f"[Debug] Current ROI: {bool(current_roi)}",
+            f"[Debug] Identified map: {matcher._identified_map}",
+            f"[Debug] Input blocked: {input_block_event.is_set()}",
+            f"[Debug] Hotkey blocked: {get_hotkey_manager().is_blocked()}",
+            f"[Debug] Overlay root exists: {overlay and overlay.root is not None}",
+            f"[Debug] Overlay visible: {overlay and overlay.is_visible}"
+        ]
+        
+        for info in debug_info:
+            overlay.add_status(info)
+            print(info)  # Also print to console
 
         if matcher.is_cache_expired():
             overlay.add_status("[Cache] Expired - will re-identify")
@@ -518,8 +585,15 @@ def keyboard_handler():
                 overlay.add_status(f"[Overlay] Showing {matcher._identified_map} (detection in progress)")
             return
 
+        print("[Debug] Calling ensure_roi()...")
+        overlay.add_status("[Debug] Calling ensure_roi()...")
         roi = ensure_roi()
+        roi_debug = f"[Debug] ensure_roi() returned: {roi}"
+        print(roi_debug)
+        overlay.add_status(roi_debug)
         if not roi:
+            print("[Debug] ROI is None - ensure_roi failed")
+            overlay.add_status("[Debug] ROI is None - ensure_roi failed")
             return
 
         frame = capture_screen()
@@ -533,7 +607,23 @@ def keyboard_handler():
                 return
 
             while True:
+                menu_debug = "[Debug] About to show main menu..."
+                print(menu_debug)
+                overlay.add_status(menu_debug)
+                
+                maps_debug = f"[Debug] Available maps: {len(available_maps)}"
+                print(maps_debug)
+                overlay.add_status(maps_debug)
+                
+                roi_debug = f"[Debug] ROI: {roi}"
+                print(roi_debug)
+                overlay.add_status(roi_debug)
+                
                 choice, title_canvas['ref'] = show_main_menu(overlay.root, available_maps, roi)
+                
+                choice_debug = f"[Debug] Menu returned: {choice}"
+                print(choice_debug)
+                overlay.add_status(choice_debug)
 
                 if choice == "CANCEL":
                     if title_canvas['ref']:
@@ -543,7 +633,9 @@ def keyboard_handler():
                             pass
                         title_canvas['ref'] = None
                     overlay.clear_popup_layers()
+                    overlay.hide_grid()  # Hide the overlay completely
                     overlay.add_status("[Cancelled]")
+                    print("[Debug] Menu cancelled - overlay hidden")
                     return
                 if choice == "SETTINGS":
                     with block_user_input():
@@ -733,19 +825,24 @@ def main():
             if overlay:
                 overlay.clear_popup_layers()
 
-    try:
-        tray_manager = SystemTrayManager(
-            ui_dispatch=dispatch_to_ui,
-            on_exit=tray_exit,
-            on_select_monitor=tray_select_monitor,
-            on_select_roi=tray_select_roi,
-            on_open_settings=tray_open_settings,
-        )
-        tray_manager.start()
-        overlay.add_status("[Tray] System tray active")
-    except RuntimeError as err:
+    # Only enable system tray when running as script (not as executable)
+    if not is_executable():
+        try:
+            tray_manager = SystemTrayManager(
+                ui_dispatch=dispatch_to_ui,
+                on_exit=tray_exit,
+                on_select_monitor=tray_select_monitor,
+                on_select_roi=tray_select_roi,
+                on_open_settings=tray_open_settings,
+            )
+            tray_manager.start()
+            overlay.add_status("[Tray] System tray active")
+        except RuntimeError as err:
+            tray_manager = None
+            print(f"[Tray] {err}")
+    else:
         tray_manager = None
-        print(f"[Tray] {err}")
+        overlay.add_status("[Info] Running as executable - System tray disabled")
 
     kb_thread = threading.Thread(target=keyboard_handler, daemon=True)
     kb_thread.start()

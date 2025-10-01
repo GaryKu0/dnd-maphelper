@@ -3,6 +3,11 @@ import os
 import sys
 
 
+def is_executable():
+    """Check if running as a PyInstaller executable."""
+    return getattr(sys, 'frozen', False) and hasattr(sys, '_MEIPASS')
+
+
 def resource_path(relative_path):
     """Get absolute path to resource, works for dev and for PyInstaller.
 

@@ -312,7 +312,7 @@ def show_main_menu(root, available_maps, roi=None):
     # Instructions
     canvas.create_text(
         menu_width // 2, menu_height - 30,
-        text="M or ESC to cancel",
+        text="ESC to cancel",
         fill="#888888", font=(CUSTOM_FONT, 9)
     )
 
@@ -328,8 +328,6 @@ def show_main_menu(root, available_maps, roi=None):
             else:
                 last_esc_press['time'] = current_time
                 set_result("CANCEL")
-        elif event.keysym.lower() == 'm':
-            set_result("CANCEL")
 
     root.bind('<Key>', on_key)
 

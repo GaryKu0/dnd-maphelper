@@ -114,6 +114,24 @@ class OverlayManager:
             )
             y_offset += 20
 
+        # Close button (top-right)
+        self.close_button = tk.Button(
+            self.root,
+            text="✕",
+            font=(self.custom_font, 14, "bold"),
+            fg="#FF6B6B",
+            bg="#2a2a2a",
+            activebackground="#FF6B6B",
+            activeforeground="white",
+            relief="flat",
+            bd=0,
+            width=3,
+            height=1,
+            cursor="hand2",
+            command=self._on_close_button_click
+        )
+        self.close_button.place(x=self.screen_width - 40, y=10)
+
         # Start update loop
         self._update_messages()
 
@@ -384,6 +402,12 @@ class OverlayManager:
         self.root.wait_window(selector_canvas)
 
         return result['roi']
+
+    def _on_close_button_click(self):
+        """Handle close button click."""
+        # Import here to avoid circular imports
+        from main import request_shutdown
+        request_shutdown("[Exit] Close button clicked")
 
     def stop(self):
         """Stop overlay."""

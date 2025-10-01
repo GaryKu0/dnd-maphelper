@@ -9,5 +9,6 @@
   "ratio_test": 0.75,
   "early_stop_threshold": 75,
   "min_cache_confidence": 60,
-  "language": "en"
+  "language": "en",
+  "hotkey_debounce_seconds": 0.3
 }
