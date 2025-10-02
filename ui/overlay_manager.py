@@ -51,16 +51,46 @@ class OverlayManager:
         """Load custom fonts if available."""
         from utils.resource_path import resource_path
         fonts_dir = resource_path("fonts")
+        print(f"[Font] Looking for fonts in: {fonts_dir}")
+        
         if os.path.isdir(fonts_dir):
+            print(f"[Font] Fonts directory exists, contents: {os.listdir(fonts_dir)}")
             for font_file in os.listdir(fonts_dir):
                 if font_file.lower().endswith(('.ttf', '.otf')):
                     font_path = os.path.join(fonts_dir, font_file)
+                    print(f"[Font] Attempting to load font: {font_path}")
                     if loadfont(font_path):
-                        # Extract font name (without extension)
-                        font_name = os.path.splitext(font_file)[0]
-                        self.custom_font = font_name
-                        print(f"[Font] Loaded custom font: {font_name}")
-                        return
+                        # Get the actual font family name that was registered
+                        import tkinter as tk
+                        from tkinter import font
+                        root = tk.Tk()
+                        root.withdraw()  # Hide the window
+                        families = font.families()
+                        root.destroy()
+                        
+                        # Find the font family that was just loaded
+                        font_name = None
+                        for family in families:
+                            if 'Solmoe' in family and 'Kim' in family:
+                                font_name = family
+                                break
+                        
+                        if font_name:
+                            self.custom_font = font_name
+                            print(f"[Font] Successfully loaded custom font: {font_name}")
+                            return
+                        else:
+                            self.custom_font = os.path.splitext(font_file)[0]
+                            print(f"[Font] Font loaded but family name not found, using filename: {self.custom_font}")
+                            return
+                    else:
+                        print(f"[Font] Failed to load font: {font_path}")
+        else:
+            print(f"[Font] Fonts directory does not exist: {fonts_dir}")
+        
+        # Fallback to a better default font
+        self.custom_font = "Segoe UI"
+        print(f"[Font] Using fallback font: {self.custom_font}")
 
     def init(self, monitor_info=None):
         """Initialize Tkinter window."""

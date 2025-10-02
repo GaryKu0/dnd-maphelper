@@ -319,14 +319,23 @@ def request_shutdown(status_message=None):
     if overlay:
         overlay.stop()
 
+    # Force program exit
+    sys.exit(0)
+
 
 def keyboard_handler():
     """Handle keyboard shortcuts using event-driven hotkeys."""
     global map_showing, current_roi, detector
 
     hotkey_mgr = get_hotkey_manager()
-    last_esc_press = {'time': 0}
     title_canvas = {'ref': None}
+
+    # ESC double-press tracking
+    last_esc_press = {'time': 0}
+
+    # R long press tracking
+    r_press_start = {'time': 0}
+    r_long_press_threshold = 2.0  # 2 seconds
 
     overlay.add_status("=== Map Helper Ready ===")
     overlay.add_status("Press M - Toggle map")
@@ -335,6 +344,7 @@ def keyboard_handler():
     def handle_esc():
         if input_block_event.is_set():
             return
+
         current_time = time.time()
         if current_time - last_esc_press['time'] < 1.0:
             request_shutdown("[Exit] Closing...")
@@ -346,6 +356,34 @@ def keyboard_handler():
         if input_block_event.is_set():
             return
 
+        current_time = time.time()
+        
+        # Check if this is a long press (2+ seconds)
+        if r_press_start['time'] == 0:
+            # Start of R press
+            r_press_start['time'] = current_time
+            print("[Input] R pressed (hold for 2 seconds to reset cache)")
+            overlay.add_status("[Input] R pressed (hold for 2 seconds to reset cache)")
+            return
+        
+        # Check if enough time has passed for long press
+        press_duration = current_time - r_press_start['time']
+        if press_duration >= r_long_press_threshold:
+            print(f"[Input] R long press detected ({press_duration:.1f}s) - resetting cache")
+            overlay.add_status(f"[Input] R long press detected ({press_duration:.1f}s) - resetting cache")
+            
+            # Reset the press start time
+            r_press_start['time'] = 0
+            
+            # Perform the reset
+            perform_reset()
+        else:
+            # Still holding, show progress
+            remaining = r_long_press_threshold - press_duration
+            print(f"[Input] R held for {press_duration:.1f}s (need {remaining:.1f}s more)")
+            overlay.add_status(f"[Input] R held for {press_duration:.1f}s (need {remaining:.1f}s more)")
+
+    def perform_reset():
         global current_roi, map_showing
 
         # Hide current map display
@@ -394,7 +432,9 @@ def keyboard_handler():
             print(roi_debug)
             overlay.add_status(roi_debug)
             
-            choice, title_canvas['ref'] = show_main_menu(overlay.root, available_maps, roi)
+            # Block hotkeys while menu is open to avoid double-trigger on 'M'
+            with block_user_input():
+                choice, title_canvas['ref'] = show_main_menu(overlay.root, available_maps, roi)
             
             choice_debug = f"[Debug] Menu returned: {choice}"
             print(choice_debug)
@@ -448,7 +488,9 @@ def keyboard_handler():
                 detected_map, confidence, detected_grid, _ = candidates[0]
                 overlay.add_status(f"[Found] {detected_map} ({confidence}% confidence)")
 
-                confirmation = show_map_confirmation(overlay.root, detected_map)
+                # Block hotkeys during confirmation dialog
+                with block_user_input():
+                    confirmation = show_map_confirmation(overlay.root, detected_map)
 
                 if confirmation == "YES":
                     map_name = detected_map
@@ -514,6 +556,7 @@ def keyboard_handler():
 
     def handle_m():
         global map_showing, current_roi, detector
+
         if input_block_event.is_set():
             print("[Input] M pressed (blocked)")
             overlay.add_status("[Input] M pressed (blocked)")
@@ -619,7 +662,9 @@ def keyboard_handler():
                 print(roi_debug)
                 overlay.add_status(roi_debug)
                 
-                choice, title_canvas['ref'] = show_main_menu(overlay.root, available_maps, roi)
+                # Block hotkeys while menu is open to avoid double-trigger on 'M'
+                with block_user_input():
+                    choice, title_canvas['ref'] = show_main_menu(overlay.root, available_maps, roi)
                 
                 choice_debug = f"[Debug] Menu returned: {choice}"
                 print(choice_debug)
@@ -665,7 +710,9 @@ def keyboard_handler():
                     detected_map, confidence, detected_grid, _ = candidates[0]
                     overlay.add_status(f"[Found] {detected_map} ({confidence}% confidence)")
 
-                    confirmation = show_map_confirmation(overlay.root, detected_map)
+                    # Block hotkeys during confirmation dialog
+                    with block_user_input():
+                        confirmation = show_map_confirmation(overlay.root, detected_map)
 
                     if confirmation == "YES":
                         map_name = detected_map
@@ -744,10 +791,11 @@ def keyboard_handler():
                 overlay.root.after(0, callback)
         return wrapper
 
-    # Register hotkeys
-    hotkey_mgr.register('esc', 'esc', dispatch(handle_esc))
-    hotkey_mgr.register('reset', 'r', dispatch(handle_reset))
-    hotkey_mgr.register('m', 'm', dispatch(handle_m))
+    # Register hotkeys - use keydown with built-in debounce in HotkeyManager to prevent OS key repeat
+    hotkey_mgr.register('esc', 'esc', dispatch(handle_esc), suppress=True)
+    hotkey_mgr.register('reset', 'r', dispatch(handle_reset), suppress=True)
+    # Trigger M on key release to prevent rapid repeat while holding
+    hotkey_mgr.register('m', 'm', dispatch(handle_m), suppress=True, trigger_on='up')
 
     # Wait for shutdown
     while not shutdown_event.is_set():
@@ -825,24 +873,21 @@ def main():
             if overlay:
                 overlay.clear_popup_layers()
 
-    # Only enable system tray when running as script (not as executable)
-    if not is_executable():
-        try:
-            tray_manager = SystemTrayManager(
-                ui_dispatch=dispatch_to_ui,
-                on_exit=tray_exit,
-                on_select_monitor=tray_select_monitor,
-                on_select_roi=tray_select_roi,
-                on_open_settings=tray_open_settings,
-            )
-            tray_manager.start()
-            overlay.add_status("[Tray] System tray active")
-        except RuntimeError as err:
-            tray_manager = None
-            print(f"[Tray] {err}")
-    else:
+    # Enable system tray for both script and executable versions
+    try:
+        tray_manager = SystemTrayManager(
+            ui_dispatch=dispatch_to_ui,
+            on_exit=tray_exit,
+            on_select_monitor=tray_select_monitor,
+            on_select_roi=tray_select_roi,
+            on_open_settings=tray_open_settings,
+        )
+        tray_manager.start()
+        overlay.add_status("[Tray] System tray active")
+    except RuntimeError as err:
         tray_manager = None
-        overlay.add_status("[Info] Running as executable - System tray disabled")
+        print(f"[Tray] {err}")
+        overlay.add_status(f"[Tray] Failed to start: {err}")
 
     kb_thread = threading.Thread(target=keyboard_handler, daemon=True)
     kb_thread.start()

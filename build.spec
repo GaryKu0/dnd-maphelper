@@ -21,6 +21,9 @@ a = Analysis(
         'PIL',
         'PIL.Image',
         'PIL.ImageTk',
+        'pystray',                  # System tray functionality
+        'pystray._win32',           # Windows-specific pystray backend
+        'PIL.ImageDraw',            # Required for tray icon generation
         'utils.resource_path',      # Ensure resource path util is included
     ],
     hookspath=[],

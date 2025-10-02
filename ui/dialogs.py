@@ -31,15 +31,47 @@ else:
 
 
 def get_custom_font():
-    """Get custom font name or default to Arial."""
-    fonts_dir = "./fonts"
+    """Get custom font name or default to Segoe UI."""
+    from utils.resource_path import resource_path
+    fonts_dir = resource_path("fonts")
+    print(f"[Dialog Font] Looking for fonts in: {fonts_dir}")
+    
     if os.path.isdir(fonts_dir):
+        print(f"[Dialog Font] Fonts directory exists, contents: {os.listdir(fonts_dir)}")
         for font_file in os.listdir(fonts_dir):
             if font_file.lower().endswith(('.ttf', '.otf')):
                 font_path = os.path.join(fonts_dir, font_file)
+                print(f"[Dialog Font] Attempting to load font: {font_path}")
                 if loadfont(font_path):
-                    return os.path.splitext(font_file)[0]
-    return "Arial"
+                    # Get the actual font family name that was registered
+                    import tkinter as tk
+                    from tkinter import font
+                    root = tk.Tk()
+                    root.withdraw()  # Hide the window
+                    families = font.families()
+                    root.destroy()
+                    
+                    # Find the font family that was just loaded
+                    font_name = None
+                    for family in families:
+                        if 'Solmoe' in family and 'Kim' in family:
+                            font_name = family
+                            break
+                    
+                    if font_name:
+                        print(f"[Dialog Font] Successfully loaded custom font: {font_name}")
+                        return font_name
+                    else:
+                        print(f"[Dialog Font] Font loaded but family name not found, using filename")
+                        return os.path.splitext(font_file)[0]
+                else:
+                    print(f"[Dialog Font] Failed to load font: {font_path}")
+    else:
+        print(f"[Dialog Font] Fonts directory does not exist: {fonts_dir}")
+    
+    # Fallback to a better default font
+    print(f"[Dialog Font] Using fallback font: Segoe UI")
+    return "Segoe UI"
 
 
 CUSTOM_FONT = get_custom_font()
@@ -312,22 +344,14 @@ def show_main_menu(root, available_maps, roi=None):
     # Instructions
     canvas.create_text(
         menu_width // 2, menu_height - 30,
-        text="ESC to cancel",
+        text="Press M to close menu",
         fill="#888888", font=(CUSTOM_FONT, 9)
     )
 
-    # ESC double-press to exit app, M to cancel
+    # Only M key can close the menu
     def on_key(event):
-        if event.keysym == 'Escape':
-            current_time = time.time()
-            time_since_last_esc = current_time - last_esc_press['time']
-
-            if time_since_last_esc < 1.0:  # Within 1 second - exit app
-                import sys
-                sys.exit(0)
-            else:
-                last_esc_press['time'] = current_time
-                set_result("CANCEL")
+        if event.keysym.lower() == 'm':
+            set_result("CANCEL")
 
     root.bind('<Key>', on_key)
 
