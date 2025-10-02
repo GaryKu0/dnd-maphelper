@@ -353,11 +353,15 @@ def keyboard_handler():
             overlay.add_status("[ESC] Press again to exit")
 
     def handle_reset():
+        # Only allow R key when map is showing (don't hijack game input otherwise)
+        if not map_showing:
+            return
+
         if input_block_event.is_set():
             return
 
         current_time = time.time()
-        
+
         # Check if this is a long press (2+ seconds)
         if r_press_start['time'] == 0:
             # Start of R press
@@ -365,16 +369,16 @@ def keyboard_handler():
             print("[Input] R pressed (hold for 2 seconds to reset cache)")
             overlay.add_status("[Input] R pressed (hold for 2 seconds to reset cache)")
             return
-        
+
         # Check if enough time has passed for long press
         press_duration = current_time - r_press_start['time']
         if press_duration >= r_long_press_threshold:
             print(f"[Input] R long press detected ({press_duration:.1f}s) - resetting cache")
             overlay.add_status(f"[Input] R long press detected ({press_duration:.1f}s) - resetting cache")
-            
+
             # Reset the press start time
             r_press_start['time'] = 0
-            
+
             # Perform the reset
             perform_reset()
         else:
@@ -793,7 +797,8 @@ def keyboard_handler():
 
     # Register hotkeys - use keydown with built-in debounce in HotkeyManager to prevent OS key repeat
     hotkey_mgr.register('esc', 'esc', dispatch(handle_esc), suppress=True)
-    hotkey_mgr.register('reset', 'r', dispatch(handle_reset), suppress=True)
+    # R key only suppressed when map is showing (checked in handle_reset)
+    hotkey_mgr.register('reset', 'r', dispatch(handle_reset), suppress=False)
     # Trigger M on key release to prevent rapid repeat while holding
     hotkey_mgr.register('m', 'm', dispatch(handle_m), suppress=True, trigger_on='up')
 
